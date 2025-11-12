@@ -1,0 +1,2 @@
+# SnakeSoutez
+Soutěž snake
