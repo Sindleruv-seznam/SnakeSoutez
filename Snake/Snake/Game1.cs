@@ -18,6 +18,7 @@ namespace Snake
         private Texture2D _pixel;
         private Color _snakeColor = Color.LimeGreen;
         private Color _snake2Color = Color.Red;
+        private Color _barrierColor = Color.DarkGray;
         private Color _background = Color.CornflowerBlue;
 
         // Snake state (player 1)
@@ -32,8 +33,12 @@ namespace Snake
 
         private bool _isGameOver;
 
-        // Movement timing
-        private float _moveTimer;
+        // Barriers
+        private HashSet<Point> _barrierCells = new();
+        private int _barrierOffset = 8; // distance from each screen edge in cells (moved 2 segments toward center)
+
+        // Shared movement timing (both snakes use this -> identical speed)
+        private float _sharedMoveTimer;
         private float _moveInterval = 0.15f; // seconds per step
 
         private enum Direction { Up, Down, Left, Right }
@@ -57,28 +62,51 @@ namespace Snake
             _cols = _graphics.PreferredBackBufferWidth / _cellSize;
             _rows = _graphics.PreferredBackBufferHeight / _cellSize;
 
-            // Initialize snake centered in grid (player 1, length: 2 segments)
+            // Build barriers (vertical lines spanning top to bottom, offset from edges)
+            BuildBarriers();
+
+            // Initialize green snake (player 1) at right-top facing down (2 segments)
             _snake.Clear();
-            int startX = _cols / 2;
-            int startY = _rows / 2;
-            for (int i = 0; i < 2; i++)
-                _snake.Add(new Point(startX - i, startY));
-            _direction = Direction.Right;
-            _nextDirection = Direction.Right;
+            int greenHeadX = Math.Max(1, _cols - 2);
+            int greenHeadY = 1;
+            if (greenHeadY >= _rows) greenHeadY = Math.Max(0, _rows - 2);
+            _snake.Add(new Point(greenHeadX, greenHeadY));         // head
+            _snake.Add(new Point(greenHeadX, greenHeadY - 1));     // tail above head
+            _direction = Direction.Down;
+            _nextDirection = Direction.Down;
 
-            // Initialize snake2 (player 2) near upper-left quarter (length: 2 segments)
+            // Initialize red snake (player 2) at left-bottom facing up (2 segments)
             _snake2.Clear();
-            int startX2 = Math.Max(1, _cols / 4);
-            int startY2 = Math.Max(1, _rows / 4);
-            for (int i = 0; i < 2; i++)
-                _snake2.Add(new Point(startX2 + i, startY2)); // oriented left
-            _direction2 = Direction.Left;
-            _nextDirection2 = Direction.Left;
+            int redHeadX = 1;
+            int redHeadY = Math.Max(1, _rows - 2);
+            if (redHeadY < 0) redHeadY = 0;
+            _snake2.Add(new Point(redHeadX, redHeadY));            // head
+            _snake2.Add(new Point(redHeadX, redHeadY + 1));        // tail below head
+            _direction2 = Direction.Up;
+            _nextDirection2 = Direction.Up;
 
-            _moveTimer = 0f;
+            _sharedMoveTimer = 0f;
             _isGameOver = false;
 
             base.Initialize();
+        }
+
+        private void BuildBarriers()
+        {
+            _barrierCells.Clear();
+
+            // ensure offsets are sane
+            int leftX = Math.Max(0, Math.Min(_cols - 1, _barrierOffset));
+            int rightX = Math.Max(0, Math.Min(_cols - 1, _cols - 1 - _barrierOffset));
+
+            // if offsets collide, skip building barriers
+            if (leftX >= rightX) return;
+
+            for (int y = 0; y < _rows; y++)
+            {
+                _barrierCells.Add(new Point(leftX, y));
+                _barrierCells.Add(new Point(rightX, y));
+            }
         }
 
         protected override void LoadContent()
@@ -110,11 +138,11 @@ namespace Snake
 
             HandleInput();
 
-            // Movement timer
-            _moveTimer += (float)gameTime.ElapsedGameTime.TotalSeconds;
-            if (_moveTimer >= _moveInterval)
+            // Shared movement timer — both snakes move together at identical speed
+            _sharedMoveTimer += (float)gameTime.ElapsedGameTime.TotalSeconds;
+            if (_sharedMoveTimer >= _moveInterval)
             {
-                _moveTimer -= _moveInterval;
+                _sharedMoveTimer -= _moveInterval;
                 _direction = _nextDirection;
                 _direction2 = _nextDirection2;
                 StepSnakes();
@@ -166,7 +194,7 @@ namespace Snake
 
         private void StepSnakes()
         {
-            // Move snake1
+            // Move snake1 (green)
             var head = _snake[0];
             Point newHead = head;
             switch (_direction)
@@ -177,8 +205,8 @@ namespace Snake
                 case Direction.Right: newHead = new Point(head.X + 1, head.Y); break;
             }
 
-            // If new head is outside grid, end the game
-            if (newHead.X < 0 || newHead.X >= _cols || newHead.Y < 0 || newHead.Y >= _rows)
+            // If new head hits a barrier or is outside grid, end the game
+            if (newHead.X < 0 || newHead.X >= _cols || newHead.Y < 0 || newHead.Y >= _rows || _barrierCells.Contains(newHead))
             {
                 _isGameOver = true;
                 return;
@@ -187,7 +215,7 @@ namespace Snake
             _snake.Insert(0, newHead);
             _snake.RemoveAt(_snake.Count - 1);
 
-            // Move snake2
+            // Move snake2 (red)
             var head2 = _snake2[0];
             Point newHead2 = head2;
             switch (_direction2)
@@ -198,7 +226,7 @@ namespace Snake
                 case Direction.Right: newHead2 = new Point(head2.X + 1, head2.Y); break;
             }
 
-            if (newHead2.X < 0 || newHead2.X >= _cols || newHead2.Y < 0 || newHead2.Y >= _rows)
+            if (newHead2.X < 0 || newHead2.X >= _cols || newHead2.Y < 0 || newHead2.Y >= _rows || _barrierCells.Contains(newHead2))
             {
                 _isGameOver = true;
                 return;
@@ -214,14 +242,21 @@ namespace Snake
 
             _spriteBatch.Begin();
 
-            // Draw snake segments (player 1)
+            // Draw barriers
+            foreach (var cell in _barrierCells)
+            {
+                var rect = new Rectangle(cell.X * _cellSize, cell.Y * _cellSize, _cellSize, _cellSize);
+                _spriteBatch.Draw(_pixel, rect, _barrierColor);
+            }
+
+            // Draw snake segments (player 1 - green)
             foreach (var segment in _snake)
             {
                 var rect = new Rectangle(segment.X * _cellSize, segment.Y * _cellSize, _cellSize, _cellSize);
                 _spriteBatch.Draw(_pixel, rect, _snakeColor);
             }
 
-            // Draw snake2 segments (player 2)
+            // Draw snake2 segments (player 2 - red)
             foreach (var segment in _snake2)
             {
                 var rect = new Rectangle(segment.X * _cellSize, segment.Y * _cellSize, _cellSize, _cellSize);
