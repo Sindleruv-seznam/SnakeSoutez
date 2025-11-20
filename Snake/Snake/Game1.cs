@@ -19,6 +19,7 @@ namespace Snake
         private Color _snakeColor = Color.LimeGreen;
         private Color _snake2Color = Color.Red;
         private Color _barrierColor = Color.DarkGray;
+        private Color _foodColor = Color.Blue;
         private Color _background = Color.CornflowerBlue;
 
         // Snake state (player 1)
@@ -36,10 +37,22 @@ namespace Snake
         // Barriers
         private HashSet<Point> _barrierCells = new();
         private int _barrierOffset = 8; // distance from each screen edge in cells (moved 2 segments toward center)
+        private int _leftBarrierX;
+        private int _rightBarrierX;
+
+        // Food (one per side region)
+        private Point? _leftFood;
+        private Point? _rightFood;
+        private Random _rnd;
+
+        // Food spawn cooldowns (seconds)
+        private float _leftFoodCooldown;
+        private float _rightFoodCooldown;
+        private const float FoodRespawnCooldown = 5f; // ~5 seconds
 
         // Shared movement timing (both snakes use this -> identical speed)
         private float _sharedMoveTimer;
-        private float _moveInterval = 0.15f; // seconds per step
+        private float _moveInterval = 0.20f; // seconds per step
 
         private enum Direction { Up, Down, Left, Right }
 
@@ -52,6 +65,8 @@ namespace Snake
 
         protected override void Initialize()
         {
+            _rnd = new Random();
+
             // Window size already set in the file; keep current values (1000x600)
             _graphics.PreferredBackBufferWidth = _graphics.PreferredBackBufferWidth;
             _graphics.PreferredBackBufferHeight = _graphics.PreferredBackBufferHeight;
@@ -85,6 +100,14 @@ namespace Snake
             _direction2 = Direction.Up;
             _nextDirection2 = Direction.Up;
 
+            // Clear and spawn foods, reset cooldowns
+            _leftFood = null;
+            _rightFood = null;
+            _leftFoodCooldown = 0f;
+            _rightFoodCooldown = 0f;
+            SpawnFoodLeft();
+            SpawnFoodRight();
+
             _sharedMoveTimer = 0f;
             _isGameOver = false;
 
@@ -96,17 +119,61 @@ namespace Snake
             _barrierCells.Clear();
 
             // ensure offsets are sane
-            int leftX = Math.Max(0, Math.Min(_cols - 1, _barrierOffset));
-            int rightX = Math.Max(0, Math.Min(_cols - 1, _cols - 1 - _barrierOffset));
+            _leftBarrierX = Math.Max(0, Math.Min(_cols - 1, _barrierOffset));
+            _rightBarrierX = Math.Max(0, Math.Min(_cols - 1, _cols - 1 - _barrierOffset));
 
             // if offsets collide, skip building barriers
-            if (leftX >= rightX) return;
+            if (_leftBarrierX >= _rightBarrierX) return;
 
             for (int y = 0; y < _rows; y++)
             {
-                _barrierCells.Add(new Point(leftX, y));
-                _barrierCells.Add(new Point(rightX, y));
+                _barrierCells.Add(new Point(_leftBarrierX, y));
+                _barrierCells.Add(new Point(_rightBarrierX, y));
             }
+        }
+
+        private bool SpawnFoodLeft()
+        {
+            // left region is x in [0, _leftBarrierX - 1]
+            int maxX = _leftBarrierX - 1;
+            if (maxX < 0) return false;
+
+            for (int attempt = 0; attempt < 1000; attempt++)
+            {
+                int x = _rnd.Next(0, maxX + 1);
+                int y = _rnd.Next(0, _rows);
+                var p = new Point(x, y);
+
+                if (_barrierCells.Contains(p)) continue;
+                if (_snake.Contains(p) || _snake2.Contains(p)) continue;
+                if (_rightFood.HasValue && _rightFood.Value == p) continue;
+                _leftFood = p;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool SpawnFoodRight()
+        {
+            // right region is x in [_rightBarrierX + 1, _cols - 1]
+            int minX = _rightBarrierX + 1;
+            if (minX > _cols - 1) return false;
+
+            for (int attempt = 0; attempt < 1000; attempt++)
+            {
+                int x = _rnd.Next(minX, _cols);
+                int y = _rnd.Next(0, _rows);
+                var p = new Point(x, y);
+
+                if (_barrierCells.Contains(p)) continue;
+                if (_snake.Contains(p) || _snake2.Contains(p)) continue;
+                if (_leftFood.HasValue && _leftFood.Value == p) continue;
+                _rightFood = p;
+                return true;
+            }
+
+            return false;
         }
 
         protected override void LoadContent()
@@ -120,6 +187,8 @@ namespace Snake
 
         protected override void Update(GameTime gameTime)
         {
+            float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
+
             // Exit
             if (GamePad.GetState(PlayerIndex.One).Buttons.Back == ButtonState.Pressed ||
                 Keyboard.GetState().IsKeyDown(Keys.Escape))
@@ -139,7 +208,7 @@ namespace Snake
             HandleInput();
 
             // Shared movement timer — both snakes move together at identical speed
-            _sharedMoveTimer += (float)gameTime.ElapsedGameTime.TotalSeconds;
+            _sharedMoveTimer += dt;
             if (_sharedMoveTimer >= _moveInterval)
             {
                 _sharedMoveTimer -= _moveInterval;
@@ -148,7 +217,35 @@ namespace Snake
                 StepSnakes();
             }
 
+            // Update food cooldown timers and spawn foods when cooldown expires
+            UpdateFoodCooldowns(dt);
+
             base.Update(gameTime);
+        }
+
+        private void UpdateFoodCooldowns(float dt)
+        {
+            // Left
+            if (!_leftFood.HasValue && _leftFoodCooldown > 0f)
+            {
+                _leftFoodCooldown -= dt;
+                if (_leftFoodCooldown <= 0f)
+                {
+                    _leftFoodCooldown = 0f;
+                    SpawnFoodLeft();
+                }
+            }
+
+            // Right
+            if (!_rightFood.HasValue && _rightFoodCooldown > 0f)
+            {
+                _rightFoodCooldown -= dt;
+                if (_rightFoodCooldown <= 0f)
+                {
+                    _rightFoodCooldown = 0f;
+                    SpawnFoodRight();
+                }
+            }
         }
 
         private void HandleInput()
@@ -212,8 +309,25 @@ namespace Snake
                 return;
             }
 
+            // Check food collision (left or right)
+            bool ateLeft = _leftFood.HasValue && _leftFood.Value == newHead;
+            bool ateRight = _rightFood.HasValue && _rightFood.Value == newHead;
+
             _snake.Insert(0, newHead);
-            _snake.RemoveAt(_snake.Count - 1);
+            if (ateLeft)
+            {
+                _leftFood = null;
+                _leftFoodCooldown = FoodRespawnCooldown;
+            }
+            else if (ateRight)
+            {
+                _rightFood = null;
+                _rightFoodCooldown = FoodRespawnCooldown;
+            }
+            else
+            {
+                _snake.RemoveAt(_snake.Count - 1);
+            }
 
             // Move snake2 (red)
             var head2 = _snake2[0];
@@ -232,8 +346,24 @@ namespace Snake
                 return;
             }
 
+            bool ateLeft2 = _leftFood.HasValue && _leftFood.Value == newHead2;
+            bool ateRight2 = _rightFood.HasValue && _rightFood.Value == newHead2;
+
             _snake2.Insert(0, newHead2);
-            _snake2.RemoveAt(_snake2.Count - 1);
+            if (ateLeft2)
+            {
+                _leftFood = null;
+                _leftFoodCooldown = FoodRespawnCooldown;
+            }
+            else if (ateRight2)
+            {
+                _rightFood = null;
+                _rightFoodCooldown = FoodRespawnCooldown;
+            }
+            else
+            {
+                _snake2.RemoveAt(_snake2.Count - 1);
+            }
         }
 
         protected override void Draw(GameTime gameTime)
@@ -247,6 +377,20 @@ namespace Snake
             {
                 var rect = new Rectangle(cell.X * _cellSize, cell.Y * _cellSize, _cellSize, _cellSize);
                 _spriteBatch.Draw(_pixel, rect, _barrierColor);
+            }
+
+            // Draw foods
+            if (_leftFood.HasValue)
+            {
+                var p = _leftFood.Value;
+                var rect = new Rectangle(p.X * _cellSize, p.Y * _cellSize, _cellSize, _cellSize);
+                _spriteBatch.Draw(_pixel, rect, _foodColor);
+            }
+            if (_rightFood.HasValue)
+            {
+                var p = _rightFood.Value;
+                var rect = new Rectangle(p.X * _cellSize, p.Y * _cellSize, _cellSize, _cellSize);
+                _spriteBatch.Draw(_pixel, rect, _foodColor);
             }
 
             // Draw snake segments (player 1 - green)
