@@ -16,10 +16,12 @@ namespace Snake
         private int _rows;
         private int _cellSize;
         private Texture2D _pixel;
+        private SpriteFont _font;
         private Color _snakeColor = Color.LimeGreen;
         private Color _snake2Color = Color.Red;
         private Color _barrierColor = Color.DarkGray;
         private Color _foodColor = Color.Blue;
+        private Color _ballColor = Color.Yellow;
         private Color _background = Color.CornflowerBlue;
 
         // Snake state (player 1)
@@ -49,6 +51,16 @@ namespace Snake
         private float _leftFoodCooldown;
         private float _rightFoodCooldown;
         private const float FoodRespawnCooldown = 5f; // ~5 seconds
+
+        // Ping pong ball
+        private Vector2 _ballPos;
+        private Vector2 _ballVelocity;
+        private float _ballSpeed = 5f; // cells per second
+        private float _ballRadius = 0.4f; // half cell size
+
+        // Score
+        private int _player1Score;
+        private int _player2Score;
 
         // Shared movement timing (both snakes use this -> identical speed)
         private float _sharedMoveTimer;
@@ -108,10 +120,57 @@ namespace Snake
             SpawnFoodLeft();
             SpawnFoodRight();
 
+            // Initialize ping pong ball in the center moving diagonally
+            InitializeBall();
+
+            _player1Score = 0;
+            _player2Score = 0;
             _sharedMoveTimer = 0f;
             _isGameOver = false;
 
             base.Initialize();
+        }
+
+        private void InitializeBall()
+        {
+            _ballPos = new Vector2(_cols / 2f, _rows / 2f);
+            // Random diagonal direction (45, 135, 225, or 315 degrees)
+            int diagonalChoice = _rnd.Next(0, 4);
+            _ballVelocity = diagonalChoice switch
+            {
+                0 => new Vector2(_ballSpeed, _ballSpeed),           // down-right
+                1 => new Vector2(-_ballSpeed, _ballSpeed),          // down-left
+                2 => new Vector2(-_ballSpeed, -_ballSpeed),         // up-left
+                _ => new Vector2(_ballSpeed, -_ballSpeed)           // up-right
+            };
+        }
+
+        private void ResetGameState()
+        {
+            // Reset snake 1
+            _snake.Clear();
+            int greenHeadX = Math.Max(1, _cols - 2);
+            int greenHeadY = 1;
+            if (greenHeadY >= _rows) greenHeadY = Math.Max(0, _rows - 2);
+            _snake.Add(new Point(greenHeadX, greenHeadY));
+            _snake.Add(new Point(greenHeadX, greenHeadY - 1));
+            _direction = Direction.Down;
+            _nextDirection = Direction.Down;
+
+            // Reset snake 2
+            _snake2.Clear();
+            int redHeadX = 1;
+            int redHeadY = Math.Max(1, _rows - 2);
+            if (redHeadY < 0) redHeadY = 0;
+            _snake2.Add(new Point(redHeadX, redHeadY));
+            _snake2.Add(new Point(redHeadX, redHeadY + 1));
+            _direction2 = Direction.Up;
+            _nextDirection2 = Direction.Up;
+
+            // Reset ball
+            InitializeBall();
+
+            _sharedMoveTimer = 0f;
         }
 
         private void BuildBarriers()
@@ -183,6 +242,9 @@ namespace Snake
             // 1x1 white pixel used to draw rectangles
             _pixel = new Texture2D(GraphicsDevice, 1, 1);
             _pixel.SetData(new[] { Color.White });
+
+            // Load default font for score display
+            _font = null; // We'll draw text conditionally
         }
 
         protected override void Update(GameTime gameTime)
@@ -207,6 +269,9 @@ namespace Snake
 
             HandleInput();
 
+            // Update ball position
+            UpdateBall(dt);
+
             // Shared movement timer — both snakes move together at identical speed
             _sharedMoveTimer += dt;
             if (_sharedMoveTimer >= _moveInterval)
@@ -221,6 +286,81 @@ namespace Snake
             UpdateFoodCooldowns(dt);
 
             base.Update(gameTime);
+        }
+
+        private void UpdateBall(float dt)
+        {
+            // Update ball position
+            _ballPos += _ballVelocity * dt;
+
+            // Check if ball hits left edge (player 2 scores)
+            if (_ballPos.X - _ballRadius <= 0)
+            {
+                _player2Score++;
+                ResetGameState();
+                return;
+            }
+
+            // Check if ball hits right edge (player 1 scores)
+            if (_ballPos.X + _ballRadius >= _cols)
+            {
+                _player1Score++;
+                ResetGameState();
+                return;
+            }
+
+            // Bounce off top/bottom borders (screen edges only)
+            if (_ballPos.Y - _ballRadius <= 0)
+            {
+                _ballPos.Y = _ballRadius;
+                _ballVelocity.Y = Math.Abs(_ballVelocity.Y);
+            }
+            else if (_ballPos.Y + _ballRadius >= _rows)
+            {
+                _ballPos.Y = _rows - _ballRadius;
+                _ballVelocity.Y = -Math.Abs(_ballVelocity.Y);
+            }
+
+            // Bounce off snakes
+            foreach (var segment in _snake)
+            {
+                float ballToSegmentX = _ballPos.X - (segment.X + 0.5f);
+                float ballToSegmentY = _ballPos.Y - (segment.Y + 0.5f);
+                float dist = (float)Math.Sqrt(ballToSegmentX * ballToSegmentX + ballToSegmentY * ballToSegmentY);
+
+                if (dist < _ballRadius + 0.5f)
+                {
+                    if (Math.Abs(ballToSegmentX) > Math.Abs(ballToSegmentY))
+                    {
+                        _ballVelocity.X = -_ballVelocity.X;
+                    }
+                    else
+                    {
+                        _ballVelocity.Y = -_ballVelocity.Y;
+                    }
+                    break;
+                }
+            }
+
+            foreach (var segment in _snake2)
+            {
+                float ballToSegmentX = _ballPos.X - (segment.X + 0.5f);
+                float ballToSegmentY = _ballPos.Y - (segment.Y + 0.5f);
+                float dist = (float)Math.Sqrt(ballToSegmentX * ballToSegmentX + ballToSegmentY * ballToSegmentY);
+
+                if (dist < _ballRadius + 0.5f)
+                {
+                    if (Math.Abs(ballToSegmentX) > Math.Abs(ballToSegmentY))
+                    {
+                        _ballVelocity.X = -_ballVelocity.X;
+                    }
+                    else
+                    {
+                        _ballVelocity.Y = -_ballVelocity.Y;
+                    }
+                    break;
+                }
+            }
         }
 
         private void UpdateFoodCooldowns(float dt)
@@ -392,6 +532,14 @@ namespace Snake
                 var rect = new Rectangle(p.X * _cellSize, p.Y * _cellSize, _cellSize, _cellSize);
                 _spriteBatch.Draw(_pixel, rect, _foodColor);
             }
+
+            // Draw ping pong ball
+            var ballRect = new Rectangle(
+                (int)(_ballPos.X * _cellSize - _ballRadius * _cellSize),
+                (int)(_ballPos.Y * _cellSize - _ballRadius * _cellSize),
+                (int)(_ballRadius * 2 * _cellSize),
+                (int)(_ballRadius * 2 * _cellSize));
+            _spriteBatch.Draw(_pixel, ballRect, _ballColor);
 
             // Draw snake segments (player 1 - green)
             foreach (var segment in _snake)
